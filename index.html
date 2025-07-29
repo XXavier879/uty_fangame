@@ -1,0 +1,911 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Top-down Game with Dialog & Touch</title>
+  <style>
+    canvas {
+      background: #111;
+      display: block;
+      margin: 0 auto;
+      touch-action: none;
+    }
+    .dialog {
+      width: 400px;
+      margin: 10px auto;
+      background: #000;
+      color: white;
+      font-family: monospace;
+      padding: 10px;
+      border: 2px solid white;
+      display: none;
+    }
+    .touch-controls {
+      max-width: 400px;
+      margin: 10px auto;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 10px;
+    }
+    .btn {
+      width: 60px;
+      height: 60px;
+      background: #333;
+      color: white;
+      font-size: 20px;
+      border-radius: 10px;
+      border: none;
+      touch-action: none;
+    }
+  </style>
+  
+</head>
+<body>
+
+<canvas id="game" width="320" height="240" style="
+  width: 640px;   /* Displayed size: 2x scale */
+  height: 480px;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  image-rendering: -moz-crisp-edges;
+"></canvas>
+<div class="dialog" id="dialogBox"></div>
+
+<!-- TOUCH CONTROLS -->
+<div class="touch-controls">
+  <button class="btn" id="up">↑</button>
+</div>
+<div class="touch-controls">
+  <button class="btn" id="left">←</button>
+  <button class="btn" id="down">↓</button>
+  <button class="btn" id="right">→</button>
+</div>
+<div class="touch-controls">
+  <button class="btn" id="z">Z</button>
+  <button class="btn" id="x">X</button>
+  <button class="btn" id="c">C</button>
+</div>
+<div id="middle" style="width:200px;height:200px;background:#ccc;">Middle</div>
+<script>
+function enableMouseDirectionPlugin() {    
+  const directionCycle = [    
+    ['s'],    
+    ['s', 'd'],    
+    ['d'],    
+    ['d', 'w'],    
+    ['w'],    
+    ['w', 'a'],    
+    ['a'],    
+    ['a', 's'],    
+  ];    
+    
+  let currentDirectionIndex = 0;    
+  let heldKeys = new Set();    
+  let rightClickHeld = false;    
+    
+  const simulateKey = (key, type) => {    
+    const event = new KeyboardEvent(type, {    
+      key,    
+      code: `Key${key.toUpperCase()}`,    
+      bubbles: true,    
+      cancelable: true    
+    });    
+    document.dispatchEvent(event);    
+  };    
+    
+  const releaseAllHeldKeys = () => {    
+    heldKeys.forEach(key => simulateKey(key, 'keyup'));    
+    heldKeys.clear();    
+  };    
+    
+  const holdCurrentDirectionKeys = () => {    
+    const keys = directionCycle[currentDirectionIndex];    
+    keys.forEach(key => {    
+      if (!heldKeys.has(key)) {    
+        simulateKey(key, 'keydown');    
+        heldKeys.add(key);    
+      }    
+    });    
+  };    
+    
+  // Handle mouse wheel (direction rotation)    
+  window.addEventListener('wheel', e => {    
+    e.preventDefault();    
+    
+    const dir = e.deltaY < 0 ? 1 : -1;    
+    currentDirectionIndex = (currentDirectionIndex + dir + directionCycle.length) % directionCycle.length;    
+    
+    if (rightClickHeld) {    
+      releaseAllHeldKeys();    
+      holdCurrentDirectionKeys();    
+    }    
+    
+    console.log('Current Direction:', directionCycle[currentDirectionIndex]);    
+  }, { passive: false });    
+    
+  window.addEventListener('mousedown', e => {    
+    if (e.button === 2) { // Right-click    
+      rightClickHeld = true;    
+      holdCurrentDirectionKeys();    
+    }    
+    
+    if (e.button === 1) { // Middle-click    
+      simulateKey('c', 'keydown');    
+      setTimeout(() => simulateKey('c', 'keyup'), 50);    
+    }    
+    
+    if (e.button === 0) { // Left-click    
+      simulateKey('z', 'keydown');    
+      setTimeout(() => simulateKey('z', 'keyup'), 50);    
+    }    
+  });    
+    
+  window.addEventListener('mouseup', e => {    
+    if (e.button === 2) {    
+      rightClickHeld = false;    
+      releaseAllHeldKeys();    
+    }    
+  });    
+    
+  window.addEventListener('contextmenu', e => e.preventDefault());    
+    
+  window.addEventListener('blur', () => {    
+    rightClickHeld = false;    
+    releaseAllHeldKeys();    
+  });    
+}    
+enableMouseDirectionPlugin();
+</script>
+<script>
+let cameraTarget = {x:0,y:0,cullW:0,cullH:0}
+const keys = {};
+const DEBUG = false
+const measure_unit = 20
+const canvas = document.getElementById("game");
+const ctxbx = canvas.getContext("2d");
+ctxbx.imageSmoothingEnabled = false;
+const dialogBox = document.getElementById("dialogBox");
+let relativeLoc = {x:0,y:0}
+let camlock = {x:0,y:0}
+const ctx = {
+  drawImage(img, x, y) {
+    // Flip Y and apply camera offset
+    // Since canvas Y grows down, flipping means: canvasY = -worldY - imgHeight
+    ctxbx.drawImage(
+      img,
+      x + camlock.x,
+      -y - img.naturalHeight - camlock.y
+    );
+  },
+  strokeRect(x, y, w, h) {
+    ctxbx.strokeRect(
+      x + camlock.x,
+      -y - h - camlock.y, // flip Y and adjust for rect height
+      w,
+      h
+    );
+  },
+  fillRect(x, y, w, h) {
+    ctxbx.fillRect(
+      x + camlock.x,
+      -y - h - camlock.y, // flip Y and adjust for rect height
+      w,
+      h
+    );
+  },
+  clearRect(x,y, w,h) {
+    ctxbx.clearRect(x,y, w,h)
+  },
+  set strokeStyle(value) {
+    ctxbx.strokeStyle = value;
+  },
+  get strokeStyle() {
+    return ctxbx.strokeStyle;
+  },
+  set fillStyle(value) {
+    ctxbx.fillStyle = value;
+  },
+  get fillStyle() {
+    return ctxbx.fillStyle;
+  },
+};/**/
+console.log(canvas, ctxbx,ctx);
+function updateCamera() {
+  camlock.x = -cameraTarget.x + canvas.width / 2 - cameraTarget.cullW / 2;
+  camlock.y = -(cameraTarget.y + canvas.height / 2 - cameraTarget.cullH / 2);
+}
+function drawbox(x,y,w,h) {
+  ctx.fillRect(x,y, w, h);
+}
+function generateHexId() {
+  return Math.floor(Math.random() * 0x10000).toString(16).padStart(4, "0");
+}
+class Wall {
+  constructor(x, y, w, h) {
+    this.id = generateHexId(); // Unique 4-char hex ID
+    this.data = { x, y, w, h, c: true, id: this.id };
+    walls.push(this.data);
+  }
+
+  move(dx, dy) {
+    this.data.x += dx;
+    this.data.y += dy;
+    this.updateWall();
+  }
+
+  resize(dw, dh) {
+    this.data.w += dw;
+    this.data.h += dh;
+    this.updateWall();
+  }
+
+  exists(c) {
+    this.data.c = c !== undefined ? c : !this.data.c;
+    this.updateWall();
+  }
+
+  updateWall() {
+    const index = walls.findIndex(w => w.id === this.id);
+    if (index !== -1) {
+      walls[index] = { ...this.data }; // update by value
+    }
+  }
+}
+class InteractionBox {
+  constructor(x, y, w, h) {
+    this.x = x
+    this.y = y
+    this.w = w
+    this.h = h
+    this.cb = () => {}
+  }
+  onInteract(cb) {
+    this.cb = cb
+    return this;
+  }
+  Interaction() {
+    this.cb()
+  }
+}
+class Sprite {
+  constructor(imgSrc, x = 0, y = 0, width = 32, height = 32) {
+    this.image = new Image();
+    this.image.src = imgSrc;
+
+    this.x = x;
+    this.y = y;
+    this.width = width;
+    this.height = height;
+
+    this.loaded = false;
+    this.image.onload = () => {
+      this.loaded = true;
+      // Optionally, you could default width/height to image natural size here
+      // this.width = this.image.width;
+      // this.height = this.image.height;
+    };
+  }
+
+  setPosition(x, y) {
+    this.x = x;
+    this.y = y;
+  }
+
+  setSize(width, height) {
+    this.width = width;
+    this.height = height;
+  }
+
+  setSource(imgSrc) {
+    this.image.src = imgSrc;
+  }
+
+  render() {
+    if (!this.loaded) return; // don't render before image loads
+    ctx.drawImage(this.image, this.x, this.y, this.width, this.height);
+  }
+}
+class Character {
+  
+  constructor(id, x, y, spritePrefix = "", inputProvider = null, seprunanim) {
+    this.id = id;
+    this.x = x;
+    this.y = y;
+    this.dx = 0;
+    this.dy = 0;
+    this.width = 32;
+    this.height = 64;
+    this.cullW = 16;
+    this.cullH = 16;
+
+    this.speed = 2.5;         // ↑ faster walk
+    this.runspeed = 5;        // ↑ faster run
+    this.facing = "down";
+    this.frame = 0;
+    this.frameCount = 3;      // 0 to 3 (4 frames total)
+    this.frameTimer = 0;
+    this.frameDelay = 6;      // ↓ faster animation
+
+    this.spritePrefix = spritePrefix;
+    this.spriteImages = {};
+    this.inputProvider = inputProvider;
+    this.interactionPressed = false;
+    this.seprunanim = seprunanim || false;
+
+    const directions = ["up", "down", "left", "right"];
+    const animTypes = ["walk", "run"];
+
+    // Load sprites
+    for (let dir of directions) {
+      for (let anim of animTypes) {
+        for (let i = 0; i <= this.frameCount; i++) {
+          const key = `${spritePrefix}_${dir}_${anim}_${i}`;
+          const img = new Image();
+          img.src = `sprites/${key}.png`;
+          this.spriteImages[key] = img;
+        }
+      }
+    }
+  }
+
+  updateInput() {
+    if (!this.inputProvider) return;
+  
+    const input = this.inputProvider(); // { up, down, left, right, run, interact }
+    this.dx = this.dy = 0;
+    let speed = input.run ? this.runspeed : this.speed;
+  
+    if (input.up) this.dy = speed;
+    if (input.down) this.dy = -speed;
+    if (input.left) this.dx = -speed;
+    if (input.right) this.dx = speed;
+  
+    // Optional: prioritize last direction pressed for facing
+    if (input.up) this.facing = "up";
+    else if (input.down) this.facing = "down";
+    else if (input.left) this.facing = "left";
+    else if (input.right) this.facing = "right";
+  
+    // Normalize diagonal movement
+    if (this.dx !== 0 && this.dy !== 0) {
+      this.dx *= Math.SQRT1_2;
+      this.dy *= Math.SQRT1_2;
+    }
+  
+    this.interactionPressed = input.interact;
+  }
+
+  tryMove() {
+    const prevX = this.x;
+    const prevY = this.y;
+
+    this.x += this.dx;
+    for (let wall of walls) {
+      if (isCollidingp(this, wall)) {
+        this.x = prevX;
+        break;
+      }
+    }
+
+    this.y += this.dy;
+    for (let wall of walls) {
+      if (isCollidingp(this, wall)) {
+        this.y = prevY;
+        break;
+      }
+    }
+  }
+
+  getInteractionBox() {
+    const size = 20;
+    let ix = this.x;
+    let iy = this.y;
+
+    switch (this.facing) {
+      case "up":
+        iy -= 0;
+        break;
+      case "down":
+        iy -= (size+measure_unit);
+        break;
+      case "left":
+        ix -= size;
+        iy -= (size);
+        break;
+      case "right":
+        ix += size;
+        iy -= (size);
+        break;
+    }
+
+    return { x: ix, y: iy, w: size, h: size };
+  }
+
+  handleInteraction() {
+    if (!this.inputProvider().interact) return;
+
+    const box = this.getInteractionBox();
+
+    for (let obj of interactibles) {
+      if (this.rectsOverlap(box, obj) && typeof obj.Interaction === "function") {
+        console.log("0")
+        obj.Interaction();
+        break;
+      }
+    }
+  }
+
+  rectsOverlap(a, b) {
+    return (
+      a.x < b.x + b.w &&
+      a.x + a.w > b.x &&
+      a.y < b.y + b.h &&
+      a.y + a.h > b.y
+    );
+  }
+
+  update() {
+    this.updateInput();
+    const moved = this.dx !== 0 || this.dy !== 0;
+
+    this.tryMove();
+    this.handleInteraction();
+
+    if (!moved) {
+      this.frame = 0;
+      this.frameTimer = 0;
+      return;
+    }
+
+    this.frameTimer++;
+    const isRunning = this.inputProvider?.()?.run;
+
+    const delay = isRunning && !this.seprunanim
+      ? this.frameDelay / 2
+      : this.frameDelay;
+
+    if (this.frameTimer >= delay) {
+      this.frame = (this.frame + 1) % (this.frameCount + 1); // 0-3
+      this.frameTimer = 0;
+    }
+  }
+
+  draw() {
+    const isRunning = this.inputProvider?.()?.run;
+    const dir = this.facing;
+    const anim = isRunning && this.seprunanim ? "run" : "walk";
+    const spriteKey = `${this.spritePrefix}_${dir}_${anim}_${this.frame}`;
+    const sprite = this.spriteImages[spriteKey];
+
+    if (sprite?.complete && sprite.naturalWidth !== 0) {
+      ctx.drawImage(
+        sprite,
+        Math.round(this.x ),
+        Math.round(this.y - (this.cullH * 1.25))
+      );
+    } else {
+      ctx.fillStyle = "red";
+      drawbox(this.x + (this.cullW / 2), this.y + (this.cullH / 2), this.cullW, this.cullH);
+    }
+
+    // Debug: draw interaction box
+    if (DEBUG) {
+      const iBox = this.getInteractionBox();
+      ctx.strokeStyle = "yellow";
+      ctx.strokeRect(
+        iBox.x,
+        iBox.y,
+        iBox.w,
+        iBox.h
+      );
+    }
+  }
+}
+class Room {
+  constructor({ name, walls = [], interactibles = [], sprites = [], characters = [], triggers = [], onEnter = null }) {
+    this.name = name;
+    this.walls = walls;
+    this.interactibles = interactibles;
+    this.sprites = sprites;
+    this.characters = characters;
+    this.triggers = triggers;
+    this.onEnter = onEnter;
+  }
+
+  load() {
+    walls.length = 0;
+    interactibles.length = 0;
+    sprites.length = 0;
+    characters.length = 0;
+    triggers.length = 0;
+
+    walls.push(...this.walls);
+    interactibles.push(...this.interactibles);
+    sprites.push(...this.sprites);
+    characters.push(...this.characters);
+    triggers.push(...this.triggers);
+
+    if (this.onEnter) this.onEnter();
+  }
+}
+class Trigger {
+  constructor(x, y, w, h, callback, once = true) {
+    this.x = x;
+    this.y = y;
+    this.w = w;
+    this.h = h;
+    this.callback = callback;
+    this.once = once;
+    this.triggered = false;
+  }
+
+  check(character) {
+    if (this.triggered && this.once) return;
+
+    if (
+      character.x + character.cullW / 2 < this.x + this.w &&
+      character.x + character.cullW / 2 + character.cullW > this.x &&
+      character.y + character.cullH < this.y + this.h &&
+      character.y + character.cullH + character.cullH > this.y
+    ) {
+      this.callback(character);
+      if (this.once) this.triggered = true;
+    }
+  }
+
+  drawDebug() {
+    if (!DEBUG) return;
+    ctx.strokeStyle = "cyan";
+    ctx.strokeRect(this.x, this.y, this.w, this.h);
+  }
+}
+const walls = [
+];
+const interactibles = [
+];
+const sprites = [
+];
+const characters = [];
+const rooms = {};
+const triggers = [];
+let currentRoom = null;
+function addRoom(name, config) {
+  rooms[name] = new Room({ name, ...config });
+}
+function goToRoom(name) {
+  if (!rooms[name]) {
+    console.warn(`Room "${name}" does not exist.`);
+    return;
+  }
+
+  currentRoom = rooms[name];
+  currentRoom.load();
+}
+let currentDialog = null;
+let dialogIndex = 0;
+let dialogCharIndex = 0;
+let dialogInterval = null;
+let dialogActive = false;
+let fullDialogShown = false;
+document.addEventListener("keydown", e => keys[e.key.toLowerCase()] = true);
+document.addEventListener("keyup", e => keys[e.key.toLowerCase()] = false);
+function isCollidingp(a, b) {
+  const ax = a.x;
+  const ay = a.y; // shift downward by 0.25
+  return (
+    ax < b.x + b.w &&
+    ax + a.cullW > b.x &&
+    ay < b.y + b.h &&
+    ay + a.cullH > b.y
+  );
+}
+function isColliding(a, b) {
+  return (
+    a.x < b.x + b.w &&
+    a.x + a.size > b.x &&
+    a.y < b.y + b.h &&
+    a.y + a.size > b.y
+  );
+}
+function getInteractionBox() {
+  let ix = player.x+(player.cullW/2);
+  let iy = player.y+(player.cullH*1.75);
+  if (player.facing === "up") iy -= (player.cullH);
+  if (player.facing === "down") iy += (player.cullH);
+  if (player.facing === "left") ix -= (player.cullW);
+  if (player.facing === "right") ix += (player.cullW);
+  return { x: ix, y: iy, w: player.cullW, h: player.cullH };
+}
+function startDialog(lines) {
+  dialogActive = true;
+  currentDialog = lines;
+  dialogIndex = 0;
+  dialogCharIndex = 0;
+  fullDialogShown = false;
+  dialogBox.style.display = "block";
+  typeNextChar();
+}
+function typeNextChar() {
+  clearInterval(dialogInterval);
+  const line = currentDialog[dialogIndex];
+  dialogBox.textContent = "";
+  dialogCharIndex = 0;
+  fullDialogShown = false;
+
+  dialogInterval = setInterval(() => {
+    if (dialogCharIndex < line.length) {
+      dialogBox.textContent += line[dialogCharIndex];
+      dialogCharIndex++;
+    } else {
+      clearInterval(dialogInterval);
+      fullDialogShown = true;
+    }
+  }, 30);
+}
+function showFullDialog() {
+  clearInterval(dialogInterval);
+  dialogBox.textContent = currentDialog[dialogIndex];
+  fullDialogShown = true;
+}
+function nextDialog() {
+  dialogIndex++;
+  if (dialogIndex >= currentDialog.length) {
+    dialogActive = false;
+    dialogBox.style.display = "none";
+  } else {
+    typeNextChar();
+  }
+}
+function tryInteraction() {
+  if (localPlayer && typeof localPlayer.handleInteraction === "function") {
+    localPlayer.handleInteraction();
+  }
+}
+document.addEventListener("keydown", e => {
+  const key = e.key.toLowerCase();
+  if (key === "z" && !dialogActive) {
+    tryInteraction();
+  }
+  if (key === "x" && dialogActive && !fullDialogShown) {
+    showFullDialog();
+  }
+  if (key === "c" && dialogActive && fullDialogShown) {
+    nextDialog();
+  }
+});
+function drawWalls() {
+  ctx.fillStyle = "#888";
+  for (let wall of walls) {
+    drawbox(wall.x, wall.y-18, wall.w, wall.h);
+  }
+}
+function drawInteractibles() {
+  ctx.fillStyle = "yellow";
+  for (let obj of interactibles) {
+    drawbox(obj.x, obj.y, obj.w, obj.h);
+  }
+  ctx.fillStyle = "green";
+  for (let obj of triggers) {
+    drawbox(obj.x, obj.y-38, obj.w, obj.h);
+  }
+}
+function clear() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+}
+function renderSprites() {
+  for (let sprite of sprites) {
+    sprite.render()
+  }
+}
+function update() {
+  
+  clear();
+
+  for (let c of characters) {
+    c.update();
+  }
+updateCamera();
+  for (let trigger of triggers) {
+    for (let c of characters) {
+      trigger.check(c);
+    }
+    trigger.drawDebug();
+  }
+
+  drawWalls();
+  drawInteractibles();
+  renderSprites();
+
+  for (let c of characters) {
+    c.draw();
+  }
+
+  requestAnimationFrame(update);
+}
+update();
+</script>
+<script>
+
+new Wall(3 * measure_unit, 6 * measure_unit, 6 * measure_unit, 1 * measure_unit); // (96, 192, 192, 32)
+new Wall(3 * measure_unit, 1 * measure_unit, 1 * measure_unit, 3 * measure_unit); // (96, 32, 32, 96)
+new Wall(8 * measure_unit, 4 * measure_unit, 3 * measure_unit, 1 * measure_unit); // (256, 128, 96, 32)
+new Wall(3 * measure_unit, 5 * measure_unit, 3 * measure_unit, 2 * measure_unit); // (96, 160, 96, 64)
+const interactionBox = new InteractionBox(6 * measure_unit, 9 * measure_unit, 16, 32)
+  .onInteract(() => {
+    startDialog([
+      "Hello there, traveler!",
+      "This is a test dialog box.",
+      "You can skip with [X] or continue with [C]."
+    ]);
+  });
+
+// Push the InteractionBox
+interactibles.push(interactionBox);
+function keyboardInput() {
+  return {
+    up: keys["w"] || keys["arrowup"],
+    down: keys["s"] || keys["arrowdown"],
+    left: keys["a"] || keys["arrowleft"],
+    right: keys["d"] || keys["arrowright"],
+    run: keys["x"],
+    interact: keys["z"]
+  };
+}
+function simpleAIInput() {
+  const character = characters.find(c => c.id === "npc_guard");
+  const waypoints = [
+    { x: 200, y: 200 },
+    { x: 300, y: 200 },
+    { x: 300, y: 300 },
+    { x: 200, y: 300 }
+  ];
+  let currentPoint = 0;
+  const detectionRadius = 96;
+  let chasing = false;
+
+  return function () {
+    const player = characters.find(c => c.id === "player1");
+    if (!player) return {};
+
+    const dx = player.x - character.x;
+    const dy = player.y - character.y;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+
+    // Chase player if close enough
+    if (distance < detectionRadius) {
+      chasing = true;
+    } else if (distance > detectionRadius * 1.5) {
+      // Lose sight of player
+      chasing = false;
+    }
+
+    if (chasing) {
+      return {
+        up: dy < -4,
+        down: dy > 4,
+        left: dx < -4,
+        right: dx > 4,
+        run: true,
+        interact: false
+      };
+    }
+
+    // Patrol logic
+    const target = waypoints[currentPoint];
+    const deltaX = target.x - character.x;
+    const deltaY = target.y - character.y;
+
+    const closeEnough = Math.abs(deltaX) < 4 && Math.abs(deltaY) < 4;
+    if (closeEnough) {
+      currentPoint = (currentPoint + 1) % waypoints.length;
+    }
+
+    return {
+      up: deltaY < -4,
+      down: deltaY > 4,
+      left: deltaX < -4,
+      right: deltaX > 4,
+      run: false,
+      interact: false
+    };
+  };
+}
+const localPlayer = new Character("player1", 64, 64, "spr_ceroba", keyboardInput);
+characters.push(localPlayer);
+cameraTarget = localPlayer;
+
+// Example AI NPC
+const npc = new Character("npc_guard", 200, 200, "spr_martlet", simpleAIInput);
+characters.push(npc);
+// Create a sprite at the same position and size
+const interactionSprite = new Sprite(
+  "sprites/sprite.png",        // Replace with your sprite image path
+  interactionBox.x,
+  interactionBox.y,
+  interactionBox.w,
+  interactionBox.h
+);
+
+// Push sprite to your sprites array for rendering
+sprites.push(interactionSprite);
+addRoom("room1", {
+  walls: [
+    { x: 0, y: 0, w: 640, h: 32, c: true },
+    { x: 0, y: 448, w: 640, h: 32, c: true }
+  ],
+  triggers: [
+    new Trigger(300, 200, 32, 32, () => {
+      startDialog(["You're moving to the next room!"]);
+      setTimeout(() => goToRoom("room2"), 1000);
+    },false)
+  ],
+  onEnter: () => {
+    localPlayer.x = 64;
+    localPlayer.y = 64;
+    cameraTarget = localPlayer;
+  },
+  characters: [localPlayer]
+});
+
+addRoom("room2", {
+  walls: [
+    { x: 0, y: 0, w: 640, h: 32, c: true },
+    { x: 0, y: 448, w: 640, h: 32, c: true },
+    { x: 608, y: 0, w: 32, h: 480, c: true }
+  ],
+  triggers: [
+    new Trigger(64, 200, 32, 32, () => {
+      startDialog(["Going back!"]);
+      setTimeout(() => goToRoom("room1"), 1000);
+    },false)
+  ],
+  onEnter: () => {
+    localPlayer.x = 500;
+    localPlayer.y = 300;
+    cameraTarget = localPlayer;
+  },
+  interactibles: [
+    interactionBox
+  ],
+  characters: [localPlayer]
+});
+goToRoom("room1")
+</script>
+<script>
+  function setupTouch(id, key) {
+  const btn = document.getElementById(id);
+  btn.addEventListener("touchstart", e => {
+    e.preventDefault();
+    keys[key] = true;
+  });
+  btn.addEventListener("touchend", e => {
+    e.preventDefault();
+    keys[key] = false;
+  });
+}
+
+// Movement buttons
+setupTouch("up", "w");
+setupTouch("down", "s");
+setupTouch("left", "a");
+setupTouch("right", "d");
+setupTouch("z", "z");
+setupTouch("x","x")
+// Action buttons
+document.getElementById("z").addEventListener("touchend", e => {
+  e.preventDefault();
+  if (!dialogActive) tryInteraction();
+});
+document.getElementById("x").addEventListener("touchend", e => {
+  e.preventDefault();
+  if (dialogActive && !fullDialogShown) showFullDialog();
+});
+document.getElementById("c").addEventListener("touchend", e => {
+  e.preventDefault();
+  if (dialogActive && fullDialogShown) nextDialog();
+});
+</script>
+</body>
+</html>
